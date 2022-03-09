@@ -153,13 +153,16 @@ pub mod oxypp{
     impl CPContext{
         pub fn open(address: &str)->Result<Self>
         {
-            if let Ok((ws, _))=tungstenite::connect(address)
-            {
-                Ok(CPContext{sock:ws})
-            }
-            else
-            {
-                Err(Error::GeneralError)
+            match tungstenite::connect(address){
+                Ok((ws, _)) =>
+                {
+                    Ok(CPContext{sock:ws})
+                }
+                Err(e)=>
+                {
+                    println!("Error: {}", e);
+                    Err(Error::GeneralError)
+                }
             }
         }
         pub fn authorize()
@@ -189,10 +192,6 @@ pub mod oxypp{
 
     pub struct CSContext{
         sock: TcpListener
-    }
-
-    pub struct OCPPStream{
-        websocket:WebSocket<TcpStream>
     }
 
     impl CSContext{
@@ -225,6 +224,25 @@ pub mod oxypp{
             }
         }
     }
+
+    pub struct OCPPStream{
+        websocket:WebSocket<TcpStream>
+    }
+
+    impl OCPPStream {
+        pub fn next_call(&mut self) -> Result<OCPPMessage>
+        {
+            if let Ok(m)=self.websocket.read_message()
+            {
+                parse_message(m.to_text().unwrap_or(""))
+            }
+            else
+            {
+                Err(Error::GeneralError)
+            }
+        }
+    }
+
 }
 
 
@@ -264,6 +282,16 @@ mod oxypp_tests {
     }
     #[test]
     fn create_cp(){
-        let cp=CPContext::open("127.0.0.1:8008").unwrap();
+        let cs=CSContext::bind("127.0.0.1:8008").unwrap();
+        let th=std::thread::spawn(move ||{
+            let _res=cs.accept();
+        });
+        //std::thread::sleep_ms(1000);
+        let _cp=CPContext::open("ws://127.0.0.1:8008").unwrap();
+        th.join().unwrap_or(());
+    }
+    #[test]
+    fn create_cs(){
+        let _cs=CSContext::bind("127.0.0.1:8008").unwrap();
     }
 }
