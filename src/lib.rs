@@ -1,13 +1,14 @@
-mod oxypp{
-    use tungstenite::{Message, WebSocket};
+pub mod oxypp{
+    use tungstenite::{Message, WebSocket, accept};
     use tungstenite::stream::MaybeTlsStream;
-    use std::net::TcpStream;
+    use std::net::{TcpStream, TcpListener, ToSocketAddrs};
+    use std::io::{Read, Write};
     use serde::{Serialize, Deserialize};
     use regex::Regex;
 
     #[derive(PartialEq, Debug)]
     pub enum Error{
-        GENERAL_ERROR
+        GeneralError
     }
 
     type Result<T>=std::result::Result<T, Error>;
@@ -40,6 +41,7 @@ mod oxypp{
 
     #[derive(PartialEq, Debug)]
     pub enum OCPPError{
+        NotImplemented,
         NotSupported,
         InternalError,
         ProtocolError,
@@ -55,6 +57,7 @@ mod oxypp{
         fn from_str(s:&str)->std::result::Result<Self,()>
         {
             match s{
+                "NotImplemented"=>Ok(OCPPError::NotImplemented),
                 "NotSupported"=>Ok(OCPPError::NotSupported),
                 "InternalError"=>Ok(OCPPError::InternalError),
                 "ProtocolError"=>Ok(OCPPError::ProtocolError),
@@ -83,7 +86,7 @@ mod oxypp{
     pub enum OCPPMessage{
         Call{id:u32,message_type:OCPPAction,payload:String},
         CallResult{id:u32,payload:String},
-        CallError{id:u32,error:OCPPError,description:String,details:Option<String>}
+        CallError{id:u32,error:OCPPError,description:String,details:String}
     }
 
     impl From<OCPPMessage> for Message{
@@ -97,7 +100,7 @@ mod oxypp{
                     Message::Text(format!("[{},{},{}]", 3, id, payload))
                 }
                 OCPPMessage::CallError{id, error, description, details}=>{
-                    Message::Text(format!("[{},{},{},{}]", 4, id, "test", "replace"))
+                    Message::Text(format!("[{},{},{:?},{},{}]", 4, id, error, description, details))
                 }
             }
         }
@@ -118,7 +121,7 @@ mod oxypp{
                     payload:capture.get(3).unwrap().as_str().to_owned()
                 })
             }
-            else {Err(Error::GENERAL_ERROR)}
+            else {Err(Error::GeneralError)}
         }
         else if let Some(capture)=regexp_result.captures(m)
         {
@@ -133,16 +136,15 @@ mod oxypp{
                     id:capture.get(1).unwrap().as_str().parse().unwrap(),
                     error:error_code,
                     description:capture.get(3).unwrap().as_str().to_owned(),
-                    details:Some(capture.get(4).unwrap().as_str().to_owned())
+                    details:capture.get(4).unwrap().as_str().to_owned()
                 })
             }
             else{
-                Err(Error::GENERAL_ERROR)
+                Err(Error::GeneralError)
             }
         }
-        else {Err(Error::GENERAL_ERROR)}
+        else {Err(Error::GeneralError)}
     }
-
 
     pub struct CPContext{
         sock: WebSocket<MaybeTlsStream<TcpStream>>
@@ -157,7 +159,7 @@ mod oxypp{
             }
             else
             {
-                Err(Error::GENERAL_ERROR)
+                Err(Error::GeneralError)
             }
         }
         pub fn authorize()
@@ -180,30 +182,88 @@ mod oxypp{
             }
             else
             {
-                Err(Error::GENERAL_ERROR)
+                Err(Error::GeneralError)
             }
         }
     }
 
     pub struct CSContext{
+        sock: TcpListener
+    }
+
+    pub struct OCPPStream{
+        websocket:WebSocket<TcpStream>
+    }
+
+    impl CSContext{
+        pub fn bind<A: ToSocketAddrs>(addr: A)->Result<Self>{
+            if let Ok(listener) = TcpListener::bind(addr)
+            {
+                return Ok(CSContext{sock:listener})
+            }
+            else
+            {
+                return Err(Error::GeneralError);
+            }
+        }
+        pub fn accept(&self) -> Result<OCPPStream>
+        {
+            if let Ok((stream,_))=self.sock.accept()
+            {
+                if let Ok(ws)=tungstenite::accept(stream)
+                {
+                    return Ok(OCPPStream{websocket:ws});
+                }
+                else
+                {
+                    return Err(Error::GeneralError);
+                }
+            }
+            else
+            {
+                return Err(Error::GeneralError);
+            }
+        }
     }
 }
 
 
 #[cfg(test)]
-mod tests {
+mod oxypp_tests {
     use crate::oxypp::*;
-    #[derive(Debug)]
-    enum TestEnum{
-        Test
-    }
     #[test]
-    fn parsing() {
+    fn parsing_request() {
         let result = parse_message(r#"[2, "12345", "BootNotification", {}]"#);
         assert_eq!(result, Ok(OCPPMessage::Call{
             id:12345,
             message_type:OCPPAction::BootNotification,
             payload:"{}".to_owned()
         }));
+    }
+    #[test]
+    fn parsing_response() {
+        let result = parse_message(r#"[3,
+        "19223201",
+        {"status":"Accepted", "currentTime":"2013-02-01T20:53:32.486Z", "heartbeatInterval":300}
+       ]"#);
+        assert_eq!(result, Ok(OCPPMessage::CallResult{
+            id:19223201,
+            payload:r#"{"status":"Accepted", "currentTime":"2013-02-01T20:53:32.486Z", "heartbeatInterval":300}"#.to_owned()
+        }));
+    }
+    #[test]
+    fn parsing_error() {
+        let result = parse_message(r#"[4, "12345", "NotImplemented", "MyError", {}]"#);
+        assert_eq!(result, Ok(OCPPMessage::CallError{
+            id:12345,
+            error:OCPPError::NotImplemented,
+            description:"MyError".to_owned(),
+            details:"{}".to_owned()
+
+        }));
+    }
+    #[test]
+    fn create_cp(){
+        let cp=CPContext::open("127.0.0.1:8008").unwrap();
     }
 }
