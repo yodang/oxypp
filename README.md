@@ -1,0 +1,1 @@
+Oxypp is an implementation of the OCPP 1.6 with the JSON serialisation layer in Rust
