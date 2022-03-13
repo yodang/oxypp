@@ -241,6 +241,24 @@ pub mod oxypp{
                 Err(Error::GeneralError)
             }
         }
+
+        pub fn send_response(&mut self, m: OCPPMessage)->Result<()>
+        {
+            match self.websocket.write_message(Message::from(m))
+            {
+                Ok(())=>
+                {
+                    Ok(())
+                }
+                //Err(tungstenite::Error::SendQueueFull(_))=>
+                //{
+                //}
+                _=>
+                {
+                    Err(Error::GeneralError)
+                }
+            }
+        }
     }
 
 }
